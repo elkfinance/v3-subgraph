@@ -4,8 +4,9 @@ import { exponentToBigDecimal, safeDiv } from '../utils/index'
 import { Bundle, Pool, Token } from './../types/schema'
 import { ONE_BD, ZERO_BD, ZERO_BI } from './constants'
 
-const WETH_ADDRESS = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
-const USDC_WETH_03_POOL = '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8'
+export const WETH_ADDRESS = '0xc02aaa39b223fe8d0a0e5c4f27ead9083c756cc2'
+export const USDC_WETH_03_POOL = '0x8ad599c3a0ff1de082011efddc58f1908eb6e6d8'
+export const STABLECOIN_IS_TOKEN0 = true
 
 // token where amounts should contribute to tracked volume and liquidity
 // usually tokens that many tokens are paired with s
@@ -33,7 +34,7 @@ export const WHITELIST_TOKENS: string[] = [
   '0xfe2e637202056d30016725477c5da089ab0a043a', // sETH2
 ]
 
-const STABLE_COINS: string[] = [
+export const STABLE_COINS: string[] = [
   '0x6b175474e89094c44da98b954eedeac495271d0f',
   '0xa0b86991c6218b36c1d19d4a2e9eb0ce3606eb48',
   '0xdac17f958d2ee523a2206206994597c13d831ec7',
@@ -42,7 +43,7 @@ const STABLE_COINS: string[] = [
   '0x4dd28568d05f09b02220b09c2cb307bfd837cb95',
 ]
 
-const MINIMUM_ETH_LOCKED = BigDecimal.fromString('60')
+export const MINIMUM_ETH_LOCKED = BigDecimal.fromString('60')
 
 const Q192 = BigInt.fromI32(2).pow(192 as u8)
 export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, token1: Token): BigDecimal[] {
@@ -54,11 +55,13 @@ export function sqrtPriceX96ToTokenPrices(sqrtPriceX96: BigInt, token0: Token, t
   return [price0, price1]
 }
 
-export function getEthPriceInUSD(): BigDecimal {
-  // fetch eth prices for each stablecoin
-  const usdcPool = Pool.load(USDC_WETH_03_POOL) // dai is token0
-  if (usdcPool !== null) {
-    return usdcPool.token0Price
+export function getNativePriceInUSD(
+  stablecoinWrappedNativePoolAddress: string,
+  stablecoinIsToken0: boolean,
+): BigDecimal {
+  const stablecoinWrappedNativePool = Pool.load(stablecoinWrappedNativePoolAddress)
+  if (stablecoinWrappedNativePool !== null) {
+    return stablecoinIsToken0 ? stablecoinWrappedNativePool.token0Price : stablecoinWrappedNativePool.token1Price
   } else {
     return ZERO_BD
   }
@@ -68,8 +71,13 @@ export function getEthPriceInUSD(): BigDecimal {
  * Search through graph to find derived Eth per token.
  * @todo update to be derived ETH (add stablecoin estimates)
  **/
-export function findEthPerToken(token: Token): BigDecimal {
-  if (token.id == WETH_ADDRESS) {
+export function findNativePerToken(
+  token: Token,
+  wrappedNativeAddress: string,
+  stablecoinAddresses: string[],
+  minimumNativeLocked: BigDecimal,
+): BigDecimal {
+  if (token.id == wrappedNativeAddress) {
     return ONE_BD
   }
   const whiteList = token.whitelistPools
@@ -81,7 +89,7 @@ export function findEthPerToken(token: Token): BigDecimal {
 
   // hardcoded fix for incorrect rates
   // if whitelist includes token - get the safe price
-  if (STABLE_COINS.includes(token.id)) {
+  if (stablecoinAddresses.includes(token.id)) {
     priceSoFar = safeDiv(ONE_BD, bundle.ethPriceUSD)
   } else {
     for (let i = 0; i < whiteList.length; ++i) {
@@ -96,7 +104,7 @@ export function findEthPerToken(token: Token): BigDecimal {
             // get the derived ETH in pool
             if (token1) {
               const ethLocked = pool.totalValueLockedToken1.times(token1.derivedETH)
-              if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(MINIMUM_ETH_LOCKED)) {
+              if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(minimumNativeLocked)) {
                 largestLiquidityETH = ethLocked
                 // token1 per our token * Eth per token1
                 priceSoFar = pool.token1Price.times(token1.derivedETH as BigDecimal)
@@ -108,7 +116,7 @@ export function findEthPerToken(token: Token): BigDecimal {
             // get the derived ETH in pool
             if (token0) {
               const ethLocked = pool.totalValueLockedToken0.times(token0.derivedETH)
-              if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(MINIMUM_ETH_LOCKED)) {
+              if (ethLocked.gt(largestLiquidityETH) && ethLocked.gt(minimumNativeLocked)) {
                 largestLiquidityETH = ethLocked
                 // token0 per our token * ETH per token0
                 priceSoFar = pool.token0Price.times(token0.derivedETH as BigDecimal)
@@ -132,24 +140,25 @@ export function getTrackedAmountUSD(
   tokenAmount0: BigDecimal,
   token0: Token,
   tokenAmount1: BigDecimal,
-  token1: Token
+  token1: Token,
+  whitelistTokens: string[],
 ): BigDecimal {
   const bundle = Bundle.load('1')!
   const price0USD = token0.derivedETH.times(bundle.ethPriceUSD)
   const price1USD = token1.derivedETH.times(bundle.ethPriceUSD)
 
   // both are whitelist tokens, return sum of both amounts
-  if (WHITELIST_TOKENS.includes(token0.id) && WHITELIST_TOKENS.includes(token1.id)) {
+  if (whitelistTokens.includes(token0.id) && whitelistTokens.includes(token1.id)) {
     return tokenAmount0.times(price0USD).plus(tokenAmount1.times(price1USD))
   }
 
   // take double value of the whitelisted token amount
-  if (WHITELIST_TOKENS.includes(token0.id) && !WHITELIST_TOKENS.includes(token1.id)) {
+  if (whitelistTokens.includes(token0.id) && !whitelistTokens.includes(token1.id)) {
     return tokenAmount0.times(price0USD).times(BigDecimal.fromString('2'))
   }
 
   // take double value of the whitelisted token amount
-  if (!WHITELIST_TOKENS.includes(token0.id) && WHITELIST_TOKENS.includes(token1.id)) {
+  if (!whitelistTokens.includes(token0.id) && whitelistTokens.includes(token1.id)) {
     return tokenAmount1.times(price1USD).times(BigDecimal.fromString('2'))
   }
 
