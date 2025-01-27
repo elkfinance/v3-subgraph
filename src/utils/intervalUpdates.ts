@@ -12,14 +12,13 @@ import {
   UniswapDayData,
 } from './../types/schema'
 import { ONE_BI, ZERO_BD, ZERO_BI } from './constants'
-import { FACTORY_ADDRESS } from './constants'
 
 /**
  * Tracks global aggregate data over daily windows
  * @param event
  */
-export function updateUniswapDayData(event: ethereum.Event): UniswapDayData {
-  const uniswap = Factory.load(FACTORY_ADDRESS)!
+export function updateUniswapDayData(event: ethereum.Event, factoryAddress: string): UniswapDayData {
+  const uniswap = Factory.load(factoryAddress)!
   const timestamp = event.block.timestamp.toI32()
   const dayID = timestamp / 86400 // rounded
   const dayStartTimestamp = dayID * 86400
@@ -72,6 +71,7 @@ export function updatePoolDayData(event: ethereum.Event): PoolDayData {
   poolDayData.sqrtPrice = pool.sqrtPrice
   poolDayData.token0Price = pool.token0Price
   poolDayData.token1Price = pool.token1Price
+  poolDayData.close = pool.token0Price
   poolDayData.tick = pool.tick
   poolDayData.tvlUSD = pool.totalValueLockedUSD
   poolDayData.txCount = poolDayData.txCount.plus(ONE_BI)

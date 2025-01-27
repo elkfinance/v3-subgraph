@@ -3,7 +3,8 @@ import { BigInt } from '@graphprotocol/graph-ts'
 import { Bundle, Factory, Mint, Pool, Tick, Token } from '../../types/schema'
 import { Mint as MintEvent } from '../../types/templates/Pool/Pool'
 import { convertTokenToDecimal, loadTransaction } from '../../utils'
-import { FACTORY_ADDRESS, ONE_BI } from '../../utils/constants'
+import { getSubgraphConfig, SubgraphConfig } from '../../utils/chains'
+import { ONE_BI } from '../../utils/constants'
 import {
   updatePoolDayData,
   updatePoolHourData,
@@ -14,10 +15,16 @@ import {
 import { createTick } from '../../utils/tick'
 
 export function handleMint(event: MintEvent): void {
+  handleMintHelper(event)
+}
+
+export function handleMintHelper(event: MintEvent, subgraphConfig: SubgraphConfig = getSubgraphConfig()): void {
+  const factoryAddress = subgraphConfig.factoryAddress
+
   const bundle = Bundle.load('1')!
   const poolAddress = event.address.toHexString()
   const pool = Pool.load(poolAddress)!
-  const factory = Factory.load(FACTORY_ADDRESS)!
+  const factory = Factory.load(factoryAddress)!
 
   const token0 = Token.load(pool.token0)
   const token1 = Token.load(pool.token1)
@@ -118,7 +125,7 @@ export function handleMint(event: MintEvent): void {
     // TODO: Update Tick's volume, fees, and liquidity provider count. Computing these on the tick
     // level requires reimplementing some of the swapping code from v3-core.
 
-    updateUniswapDayData(event)
+    updateUniswapDayData(event, factoryAddress)
     updatePoolDayData(event)
     updatePoolHourData(event)
     updateTokenDayData(token0 as Token, event)

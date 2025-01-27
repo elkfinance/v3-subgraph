@@ -3,7 +3,8 @@ import { BigDecimal, BigInt } from '@graphprotocol/graph-ts'
 import { Bundle, Factory, Pool, Swap, Token } from '../../types/schema'
 import { Swap as SwapEvent } from '../../types/templates/Pool/Pool'
 import { convertTokenToDecimal, loadTransaction, safeDiv } from '../../utils'
-import { FACTORY_ADDRESS, ONE_BI, ZERO_BD } from '../../utils/constants'
+import { getSubgraphConfig, SubgraphConfig } from '../../utils/chains'
+import { ONE_BI, ZERO_BD } from '../../utils/constants'
 import {
   updatePoolDayData,
   updatePoolHourData,
@@ -11,11 +12,28 @@ import {
   updateTokenHourData,
   updateUniswapDayData,
 } from '../../utils/intervalUpdates'
-import { findEthPerToken, getEthPriceInUSD, getTrackedAmountUSD, sqrtPriceX96ToTokenPrices } from '../../utils/pricing'
+import {
+  findNativePerToken,
+  getNativePriceInUSD,
+  getTrackedAmountUSD,
+  sqrtPriceX96ToTokenPrices,
+} from '../../utils/pricing'
 
 export function handleSwap(event: SwapEvent): void {
+  handleSwapHelper(event)
+}
+
+export function handleSwapHelper(event: SwapEvent, subgraphConfig: SubgraphConfig = getSubgraphConfig()): void {
+  const factoryAddress = subgraphConfig.factoryAddress
+  const stablecoinWrappedNativePoolAddress = subgraphConfig.stablecoinWrappedNativePoolAddress
+  const stablecoinIsToken0 = subgraphConfig.stablecoinIsToken0
+  const wrappedNativeAddress = subgraphConfig.wrappedNativeAddress
+  const stablecoinAddresses = subgraphConfig.stablecoinAddresses
+  const minimumNativeLocked = subgraphConfig.minimumNativeLocked
+  const whitelistTokens = subgraphConfig.whitelistTokens
+
   const bundle = Bundle.load('1')!
-  const factory = Factory.load(FACTORY_ADDRESS)!
+  const factory = Factory.load(factoryAddress)!
   const pool = Pool.load(event.address.toHexString())!
 
   // hot fix for bad pricing
@@ -47,9 +65,13 @@ export function handleSwap(event: SwapEvent): void {
     const amount1USD = amount1ETH.times(bundle.ethPriceUSD)
 
     // get amount that should be tracked only - div 2 because cant count both input and output as volume
-    const amountTotalUSDTracked = getTrackedAmountUSD(amount0Abs, token0 as Token, amount1Abs, token1 as Token).div(
-      BigDecimal.fromString('2')
-    )
+    const amountTotalUSDTracked = getTrackedAmountUSD(
+      amount0Abs,
+      token0 as Token,
+      amount1Abs,
+      token1 as Token,
+      whitelistTokens,
+    ).div(BigDecimal.fromString('2'))
     const amountTotalETHTracked = safeDiv(amountTotalUSDTracked, bundle.ethPriceUSD)
     const amountTotalUSDUntracked = amount0USD.plus(amount1USD).div(BigDecimal.fromString('2'))
 
@@ -106,10 +128,20 @@ export function handleSwap(event: SwapEvent): void {
     pool.save()
 
     // update USD pricing
-    bundle.ethPriceUSD = getEthPriceInUSD()
+    bundle.ethPriceUSD = getNativePriceInUSD(stablecoinWrappedNativePoolAddress, stablecoinIsToken0)
     bundle.save()
-    token0.derivedETH = findEthPerToken(token0 as Token)
-    token1.derivedETH = findEthPerToken(token1 as Token)
+    token0.derivedETH = findNativePerToken(
+      token0 as Token,
+      wrappedNativeAddress,
+      stablecoinAddresses,
+      minimumNativeLocked,
+    )
+    token1.derivedETH = findNativePerToken(
+      token1 as Token,
+      wrappedNativeAddress,
+      stablecoinAddresses,
+      minimumNativeLocked,
+    )
 
     /**
      * Things afffected by new USD rates
@@ -144,7 +176,7 @@ export function handleSwap(event: SwapEvent): void {
     swap.logIndex = event.logIndex
 
     // interval data
-    const uniswapDayData = updateUniswapDayData(event)
+    const uniswapDayData = updateUniswapDayData(event, factoryAddress)
     const poolDayData = updatePoolDayData(event)
     const poolHourData = updatePoolHourData(event)
     const token0DayData = updateTokenDayData(token0 as Token, event)
